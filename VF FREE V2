@@ -1,5 +1,3 @@
--- ==================== VALV FREE (ADVANCED RAGEBOT & UNLOCK ALL - MOBILE / PC AUTO SWITCH) ====================
-
 local UserInputService = game:GetService("UserInputService")
 local isMobile = UserInputService.TouchEnabled and not UserInputService.MouseEnabled
 
@@ -60,19 +58,64 @@ if controllers then
     pcall(function() FighterController = require(controllers:WaitForChild("FighterController", 10)) end)
 end
 
--- ==================== Rage / Packet Module ====================
 local remotes = ReplicatedStorage:WaitForChild("Remotes", 10)
 local UseItemRemote = remotes and remotes:WaitForChild("Replication", 10):WaitForChild("Fighter", 10):WaitForChild("UseItem", 10)
-local PickWeaponsRemote = remotes and remotes:WaitForChild("Replication", 10):WaitForChild("Fighter", 10):WaitForChild("PickWeapons", 10)
 local StartShootingEnum = EnumLibrary and EnumLibrary:ToEnum("StartShooting") or "StartShooting"
 
 local RageModule = {
     Name = "Rage",
     LockedTarget = nil,
     NextShootAt = 0,
-    OriginalPosition = nil,
     Connections = {}
 }
+
+local slots = {
+    ["Gun"] = 1,
+    ["Secondary"] = 2,
+    ["Melee"] = 3,
+    ["Knife"] = 3
+}
+
+local function getSelectedSlotNumber()
+    local mode = Options.RageModeDropdown and Options.RageModeDropdown.Value or "Gun"
+    return slots[mode] or 1
+end
+
+-- 자동 무기 장착 루프 + Knife 모드 우클릭 칼찌 연동
+task.spawn(function()
+    while true do
+        task.wait(0.5)
+        local rageEnabled = Toggles.RageToggle and Toggles.RageToggle.Value
+        if rageEnabled and FighterController then
+            pcall(function()
+                local localFighter = FighterController.LocalFighter
+                if localFighter and localFighter.EquipItem then
+                    localFighter:EquipItem(getSelectedSlotNumber())
+                end
+            end)
+        end
+    end
+end)
+
+-- [추가] Knife 모드 시 우클릭 칼찌(근접 공격) 처리 로직
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.UserInputType == Enum.UserInputType.MouseButton2 then
+        local modeVal = Options.RageModeDropdown and Options.RageModeDropdown.Value or "Gun"
+        if modeVal == "Knife" then
+            local char = LocalPlayer.Character
+            if char then
+                local tool = char:FindFirstChildOfClass("Tool")
+                if tool then
+                    -- 나이프를 들고 있을 때 우클릭 시 툴 활성화(칼찌)
+                    pcall(function()
+                        tool:Activate()
+                    end)
+                end
+            end
+        end
+    end
+end)
 
 local function isEnemy(player)
     if player == LocalPlayer then return false end
@@ -108,23 +151,27 @@ local function getEquippedObjId()
 end
 
 local function getTargetEquippedWeaponName(targetPlayer)
+    local weaponName = ""
     pcall(function()
         if FighterController then
             local fighter = FighterController:GetFighter(targetPlayer)
             if fighter and fighter.EquippedItem then
-                return fighter.EquippedItem.Name
+                weaponName = fighter.EquippedItem.Name or ""
             end
         end
     end)
-    local char = targetPlayer.Character
-    if char then
-        for _, child in ipairs(char:GetChildren()) do
-            if child:IsA("Tool") or child:FindFirstChild("Handle") then
-                return child.Name
+    if weaponName == "" then
+        local char = targetPlayer.Character
+        if char then
+            for _, child in ipairs(char:GetChildren()) do
+                if child:IsA("Tool") or child:FindFirstChild("Handle") then
+                    weaponName = child.Name
+                    break
+                end
             end
         end
     end
-    return ""
+    return weaponName
 end
 
 local function getStickyTarget()
@@ -157,8 +204,8 @@ local function getStickyTarget()
             if distToPlayer > 600 then continue end
         end
         
-        local screenPos, isVisibleTarget = Camera:WorldToViewportPoint(hrp.Position)
-        if not isVisibleTarget then continue end
+        local screenPos, isVisible = Camera:WorldToViewportPoint(hrp.Position)
+        if not isVisible then continue end
         
         local distance = (Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2) - Vector2.new(screenPos.X, screenPos.Y)).Magnitude
         if distance < minDistance then
@@ -218,6 +265,7 @@ end
 
 local loopTimeCounter = 0
 local isAttackingPhase = false
+local katanaPauseUntil = 0
 
 local function runRageLogic()
     if not Toggles.RageToggle or not Toggles.RageToggle.Value or not UseItemRemote then return end
@@ -227,10 +275,6 @@ local function runRageLogic()
     local hum  = char and char:FindFirstChildWhichIsA("Humanoid")
     if not hrp or not hum then return end
     
-    if not RageModule.OriginalPosition then
-        RageModule.OriginalPosition = hrp.Position
-    end
-
     local hideTime = Options.HideTimeSlider and Options.HideTimeSlider.Value or 0.33
     local attackTime = Options.AttackTimeSlider and Options.AttackTimeSlider.Value or 0.05
     local totalCycle = hideTime + attackTime
@@ -241,15 +285,11 @@ local function runRageLogic()
 
     if not isAttackingPhase then
         pcall(function()
-            hrp.CFrame = CFrame.new(0, 5000000000, 0)
-            hrp.Velocity = Vector3.zero
+            hrp.CFrame = CFrame.new(hrp.Position.X, hrp.Position.Y + 50000, hrp.Position.Z)
+            hrp.Velocity = Vector3.new(hrp.Velocity.X, 0, hrp.Velocity.Z)
             hrp.RotVelocity = Vector3.zero
         end)
         return
-    else
-        if RageModule.OriginalPosition then
-            hrp.CFrame = CFrame.new(RageModule.OriginalPosition)
-        end
     end
 
     local targetPlayer = getStickyTarget()
@@ -263,22 +303,27 @@ local function runRageLogic()
             if not isProtected(tc) then
                 local enemyWeapon = string.lower(getTargetEquippedWeaponName(targetPlayer))
                 
-                if enemyWeapon:find("katana") then
+                if enemyWeapon:find("katana") or enemyWeapon:find("sword") or enemyWeapon:find("parry") then
+                    katanaPauseUntil = tick() + 0.5
                     return
                 end
                 
-                local fakePositionCF = tHead.CFrame * CFrame.new(0, 0.5, 0) * CFrame.Angles(math.rad(-90), 0, 0)
+                if tick() < katanaPauseUntil then
+                    return
+                end
+
+                local fakePositionCF
+                local modeVal = Options.RageModeDropdown and Options.RageModeDropdown.Value or "Gun"
                 
-                if enemyWeapon:find("riot") or enemyWeapon:find("shield") then
-                    fakePositionCF = tHead.CFrame * CFrame.new(0, 0.5, -2) * CFrame.Angles(math.rad(-90), 0, 0)
-                elseif enemyWeapon:find("knife") or enemyWeapon:find("dagger") then
-                    fakePositionCF = tHead.CFrame * CFrame.new(0, 1, 0) * CFrame.Angles(math.rad(-90), 0, 0)
-                elseif enemyWeapon:find("bow") then
-                    fakePositionCF = tHead.CFrame * CFrame.new(0, 0.5, 0) * CFrame.Angles(math.rad(-90), 0, 0)
+                if modeVal == "Knife" or modeVal == "Melee" then
+                    fakePositionCF = tRoot.CFrame * CFrame.new(0, 1, 1.5)
+                elseif enemyWeapon:find("riot") or enemyWeapon:find("shield") then
+                    fakePositionCF = tRoot.CFrame * CFrame.new(0, 0, -6)
+                else
+                    fakePositionCF = tRoot.CFrame * CFrame.new(0, 8, 0)
                 end
                 
                 local currentRealCF = hrp.CFrame
-                RageModule.OriginalPosition = currentRealCF.Position
                 
                 hrp.CFrame = fakePositionCF
                 hrp.Velocity = Vector3.zero
@@ -292,13 +337,11 @@ local function runRageLogic()
                     pcall(function()
                         UseItemRemote:FireServer(objId, StartShootingEnum, shotData, nil)
                         UseItemRemote:FireServer(objId, StartShootingEnum, shotData, nil)
-                        UseItemRemote:FireServer(objId, StartShootingEnum, shotData, nil)
                     end)
                 end
                 
                 RunService:BindToRenderStep("_SoftRestore", 101, function()
                     hrp.CFrame = currentRealCF
-                    hrp.Velocity = Vector3.new(hrp.Velocity.X, math.min(hrp.Velocity.Y, 0), hrp.Velocity.Z)
                     RunService:UnbindFromRenderStep("_SoftRestore")
                 end)
             end
@@ -338,7 +381,6 @@ AntiAimModule.Connection = RunService.RenderStepped:Connect(function()
 end)
 table.insert(RageModule.Connections, AntiAimModule.Connection)
 
--- ==================== Aimbot (Fixed) ====================
 local function isEnemyAim(p)
     if p == LocalPlayer then return false end
     local teamCheckEnabled = Toggles.AimbotTeamCheck and Toggles.AimbotTeamCheck.Value
@@ -352,7 +394,6 @@ local function isEnemyAim(p)
 end
 
 local function isVisible(targetPart)
-    if not targetPart or not targetPart.Parent then return false end
     local char = LocalPlayer.Character
     if not char then return false end
     local head = char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
@@ -366,11 +407,8 @@ local function isVisible(targetPart)
     raycastParams.FilterDescendantsInstances = {char, targetPart.Parent}
     raycastParams.IgnoreWater = true
 
-    local success, result = pcall(function()
-        return Workspace:Raycast(origin, direction, raycastParams)
-    end)
-    
-    return success and (result == nil)
+    local result = Workspace:Raycast(origin, direction, raycastParams)
+    return result == nil
 end
 
 local FOVDrawing = Drawing.new("Circle")
@@ -390,23 +428,21 @@ local function getAimbotTarget()
 
     for _, p in ipairs(Players:GetPlayers()) do
         if isEnemyAim(p) then
-            local char = p.Character
-            if char then
-                local hum = char:FindFirstChildWhichIsA("Humanoid")
-                if hum and hum.Health > 0 then
-                    local targetPartName = Options.AimbotPartDropdown and Options.AimbotPartDropdown.Value or "Head"
-                    local targetPart = char:FindFirstChild(targetPartName) or char:FindFirstChild("Head")
-                    
-                    if targetPart and targetPart:IsA("BasePart") then
-                        if isVisible(targetPart) then
-                            local screenPos, onScreen = Workspace.CurrentCamera:WorldToViewportPoint(targetPart.Position)
-                            if onScreen then
-                                local dist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
-                                if not useFOV or dist <= fovRadius then
-                                    if dist < shortestDist then
-                                        shortestDist = dist
-                                        closestTarget = targetPart
-                                    end
+            local hum = p.Character and p.Character:FindFirstChildWhichIsA("Humanoid")
+            if hum and hum.Health > 0 then
+                local char = p.Character
+                local targetPartName = Options.AimbotPartDropdown and Options.AimbotPartDropdown.Value or "Head"
+                local targetPart = char and char:FindFirstChild(targetPartName)
+                
+                if targetPart then
+                    if isVisible(targetPart) then
+                        local screenPos, onScreen = Workspace.CurrentCamera:WorldToViewportPoint(targetPart.Position)
+                        if onScreen then
+                            local dist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
+                            if not useFOV or dist <= fovRadius then
+                                if dist < shortestDist then
+                                    shortestDist = dist
+                                    closestTarget = targetPart
                                 end
                             end
                         end
@@ -435,24 +471,22 @@ RunService.RenderStepped:Connect(function()
 
     local target = getAimbotTarget()
     if target then
-        local targetScreenPos = Workspace.CurrentCamera:WorldToViewportPoint(target.Position)
-        local mousePos = UserInputService:GetMouseLocation()
-        local targetVector = Vector2.new(targetScreenPos.X, targetScreenPos.Y) - mousePos
-        local speedVal = Options.AimbotSpeedSlider and Options.AimbotSpeedSlider.Value or 5
-        
-        pcall(function()
-            if mousemoverel then
-                if speedVal <= 0.1 then
-                    mousemoverel(targetVector.X, targetVector.Y)
-                else
-                    mousemoverel(targetVector.X / speedVal, targetVector.Y / speedVal)
-                end
+        local targetScreenPos, onScreen = Workspace.CurrentCamera:WorldToViewportPoint(target.Position)
+        if onScreen then
+            local mousePos = UserInputService:GetMouseLocation()
+            local targetVector = Vector2.new(targetScreenPos.X, targetScreenPos.Y) - mousePos
+            local speedVal = Options.AimbotSpeedSlider and Options.AimbotSpeedSlider.Value or 5
+            
+            -- [수정 완료] 슬라이더 값이 50이거나 0.1 이하일 때 지연 없이 즉시 스냅되도록 변경
+            if speedVal >= 50 or speedVal <= 0.1 then
+                if mousemoverel then mousemoverel(targetVector.X, targetVector.Y) end
+            else
+                if mousemoverel then mousemoverel(targetVector.X / speedVal, targetVector.Y / speedVal) end
             end
-        end)
+        end
     end
 end)
 
--- ==================== Silent Aim ====================
 local SilentFOVDrawing = Drawing.new("Circle")
 SilentFOVDrawing.Visible = false
 SilentFOVDrawing.Transparency = 0.7
@@ -500,7 +534,6 @@ local function getSilentAimTarget()
     return bestTarget
 end
 
--- ==================== Hit & Kill Sound ====================
 local soundList = {
     "rust hs", "neverlose", "sparkle", "minecraft hit", "bonk", 
     "osu", "among us", "bruh", "vine", "gamesense", "장충동 왕족발 보쌈"
@@ -625,7 +658,6 @@ pcall(function()
     end
 end)
 
--- ==================== Visual ESP ====================
 local espCache = {}
 local R15_Bones = {
     {"Head", "UpperTorso"}, {"UpperTorso", "LowerTorso"},
@@ -821,7 +853,6 @@ RunService.RenderStepped:Connect(function()
     end
 end)
 
--- ==================== Misc Features ====================
 local flying = false
 local flySpeed = 50
 local flyConnection
@@ -851,14 +882,18 @@ local function startFly()
         local cam = Workspace.CurrentCamera
         local moveDir = Vector3.zero
         
-        if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveDir += cam.CFrame.LookVector end
-        if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveDir -= cam.CFrame.LookVector end
-        if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveDir += cam.CFrame.RightVector end
-        if UserInputService:IsKeyDown(Enum.KeyCode.A) then moveDir -= cam.CFrame.RightVector end
-        if UserInputService:IsKeyDown(Enum.KeyCode.Space) then moveDir += Vector3.new(0, 1, 0) end
-        if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then moveDir -= Vector3.new(0, 1, 0) end
+        if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveDir = moveDir + cam.CFrame.LookVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveDir = moveDir - cam.CFrame.LookVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveDir = moveDir + cam.CFrame.RightVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.A) then moveDir = moveDir - cam.CFrame.RightVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.Space) then moveDir = moveDir + Vector3.new(0, 1, 0) end
+        if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then moveDir = moveDir - Vector3.new(0, 1, 0) end
 
-        bv.Velocity = moveDir.Unit * flySpeed
+        if moveDir.Magnitude > 0 then
+            bv.Velocity = moveDir.Unit * flySpeed
+        else
+            bv.Velocity = Vector3.zero
+        end
         bg.CFrame = cam.CFrame
         hum.PlatformStand = true
     end)
@@ -923,7 +958,6 @@ UserInputService.JumpRequest:Connect(function()
     end
 end)
 
--- ==================== LinoriaLib UI Setup ====================
 local RageGroup = Tabs.Main:AddLeftGroupbox("Rage")
 
 RageGroup:AddToggle("RageToggle", {
@@ -945,6 +979,15 @@ RageGroup:AddToggle("AntiAimToggle", {
     Default = false,
     Callback = function(v)
     end
+})
+
+RageGroup:AddDivider()
+
+RageGroup:AddDropdown("RageModeDropdown", {
+    Values = { "Gun", "Secondary", "Melee", "Knife" },
+    Default = 1,
+    Multi = false,
+    Text = "Weapon Slot / Mode",
 })
 
 RageGroup:AddDivider()
@@ -1614,7 +1657,7 @@ local GetPing = (function() return math.floor(game:GetService("Stats").Network.S
 local CanDoPing = pcall(function() return GetPing(); end)
 
 local WatermarkConnection = RunService.RenderStepped:Connect(function()
-    FrameCounter += 1;
+    FrameCounter = FrameCounter + 1;
     if (tick() - FrameTimer) >= 1 then
         FPS = FrameCounter;
         FrameTimer = tick();
@@ -1647,7 +1690,7 @@ MenuGroup:AddDivider()
 MenuGroup:AddLabel("Menu Keybind"):AddKeyPicker("MenuKeybind", { Default = "RightShift", NoUI = true, Text = "Menu Keybind" })
 MenuGroup:AddButton("Unload", function() Library:Unload() end)
 
-Library.ToggleKeybind = Options.MenuKeybind 
+Library.KeybindToggle = Options.MenuKeybind
 
 ThemeManager:SetLibrary(Library)
 SaveManager:SetLibrary(Library)
@@ -1655,7 +1698,7 @@ SaveManager:SetLibrary(Library)
 SaveManager:IgnoreThemeSettings()
 SaveManager:SetIgnoreIndexes({ "MenuKeybind" })
 
-ThemeManager:SetFolder("MyScriptHub")
+SaveManager:SetFolder("MyScriptHub")
 SaveManager:SetFolder("MyScriptHub/specific-game")
 SaveManager:SetSubFolder("specific-place") 
 
