@@ -1,3 +1,5 @@
+-- ==================== VALV FREE (ADVANCED AIMBOT & UNLOCK ALL - MOBILE / PC AUTO SWITCH) ====================
+
 local UserInputService = game:GetService("UserInputService")
 local isMobile = UserInputService.TouchEnabled and not UserInputService.MouseEnabled
 
@@ -62,295 +64,6 @@ local remotes = ReplicatedStorage:WaitForChild("Remotes", 10)
 local UseItemRemote = remotes and remotes:WaitForChild("Replication", 10):WaitForChild("Fighter", 10):WaitForChild("UseItem", 10)
 local StartShootingEnum = EnumLibrary and EnumLibrary:ToEnum("StartShooting") or "StartShooting"
 
-local RageModule = {
-    Name = "Rage",
-    LockedTarget = nil,
-    NextShootAt = 0,
-    Connections = {}
-}
-
-local slots = {
-    ["Gun"] = 1,
-    ["Secondary"] = 2,
-    ["Melee"] = 3,
-    ["Knife"] = 3
-}
-
-local function getSelectedSlotNumber()
-    local mode = Options.RageModeDropdown and Options.RageModeDropdown.Value or "Gun"
-    return slots[mode] or 1
-end
-
--- 자동 무기 장착 루프 + Knife 모드 우클릭 칼찌 연동
-task.spawn(function()
-    while true do
-        task.wait(0.5)
-        local rageEnabled = Toggles.RageToggle and Toggles.RageToggle.Value
-        if rageEnabled and FighterController then
-            pcall(function()
-                local localFighter = FighterController.LocalFighter
-                if localFighter and localFighter.EquipItem then
-                    localFighter:EquipItem(getSelectedSlotNumber())
-                end
-            end)
-        end
-    end
-end)
-
--- [추가] Knife 모드 시 우클릭 칼찌(근접 공격) 처리 로직
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
-    if gameProcessed then return end
-    if input.UserInputType == Enum.UserInputType.MouseButton2 then
-        local modeVal = Options.RageModeDropdown and Options.RageModeDropdown.Value or "Gun"
-        if modeVal == "Knife" then
-            local char = LocalPlayer.Character
-            if char then
-                local tool = char:FindFirstChildOfClass("Tool")
-                if tool then
-                    -- 나이프를 들고 있을 때 우클릭 시 툴 활성화(칼찌)
-                    pcall(function()
-                        tool:Activate()
-                    end)
-                end
-            end
-        end
-    end
-end)
-
-local function isEnemy(player)
-    if player == LocalPlayer then return false end
-    local rageEnabled = Toggles.RageToggle and Toggles.RageToggle.Value
-    if rageEnabled then
-        local myTeam = LocalPlayer:GetAttribute("TeamID")
-        local theirTeam = player:GetAttribute("TeamID")
-        if myTeam == nil or theirTeam == nil then return true end
-        return theirTeam ~= myTeam
-    end
-    return true
-end
-
-local function isProtected(character)
-    if not character then return true end
-    if character:FindFirstChild("InvincibilityParticles", true) then return true end
-    if character:GetAttribute("SpawnProtection") == true or character:GetAttribute("Invincible") == true then
-        return true
-    end
-    return false
-end
-
-local function getEquippedObjId()
-    if not controllers then return nil end
-    local ok, FighterCtrl = pcall(function() return require(controllers.FighterController) end)
-    if not ok or not FighterCtrl or not FighterCtrl.LocalFighter then return nil end
-    local item = FighterCtrl.LocalFighter.EquippedItem
-    if not item then return nil end
-    local okId, id = pcall(function() return item:Get("ObjectID") end)
-    if okId and id then return id end
-    local okData, idData = pcall(function() return item.Data and item.Data.ObjectID end)
-    return okData and idData or nil
-end
-
-local function getTargetEquippedWeaponName(targetPlayer)
-    local weaponName = ""
-    pcall(function()
-        if FighterController then
-            local fighter = FighterController:GetFighter(targetPlayer)
-            if fighter and fighter.EquippedItem then
-                weaponName = fighter.EquippedItem.Name or ""
-            end
-        end
-    end)
-    if weaponName == "" then
-        local char = targetPlayer.Character
-        if char then
-            for _, child in ipairs(char:GetChildren()) do
-                if child:IsA("Tool") or child:FindFirstChild("Handle") then
-                    weaponName = child.Name
-                    break
-                end
-            end
-        end
-    end
-    return weaponName
-end
-
-local function getStickyTarget()
-    if RageModule.LockedTarget and RageModule.LockedTarget.Character then
-        local char = RageModule.LockedTarget.Character
-        local hum = char:FindFirstChildWhichIsA("Humanoid")
-        local hrp = char:FindFirstChild("HumanoidRootPart")
-        if hum and hum.Health > 0 and hrp and not isProtected(char) then
-            return RageModule.LockedTarget
-        else
-            RageModule.LockedTarget = nil
-        end
-    end
-    
-    local bestTarget = nil
-    local minDistance = math.huge
-    local myHrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-    
-    for _, player in ipairs(Players:GetPlayers()) do
-        if not isEnemy(player) then continue end
-        local char = player.Character
-        if not char then continue end
-        local hrp = char:FindFirstChild("HumanoidRootPart")
-        local hum = char:FindFirstChildWhichIsA("Humanoid")
-        if not hrp or not hum or hum.Health <= 0 then continue end
-        if isProtected(char) then continue end
-        
-        if myHrp then
-            local distToPlayer = (hrp.Position - myHrp.Position).Magnitude
-            if distToPlayer > 600 then continue end
-        end
-        
-        local screenPos, isVisible = Camera:WorldToViewportPoint(hrp.Position)
-        if not isVisible then continue end
-        
-        local distance = (Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2) - Vector2.new(screenPos.X, screenPos.Y)).Magnitude
-        if distance < minDistance then
-            minDistance = distance
-            bestTarget = player
-        end
-    end
-    
-    RageModule.LockedTarget = bestTarget
-    return bestTarget
-end
-
-local function buildShotData(originPos, targetPart)
-    local targetPos = targetPart.Position
-    local lookCF = CFrame.lookAt(originPos, targetPos)
-    local lX, lY, lZ = lookCF:ToOrientation()
-    local originStruct = {
-        [utf8.char(0)] = originPos.X, [utf8.char(1)] = originPos.Y, [utf8.char(2)] = originPos.Z,
-        [utf8.char(3)] = lX, [utf8.char(4)] = lY, [utf8.char(5)] = lZ,
-    }
-    local relCF = targetPart.CFrame:ToObjectSpace(CFrame.new(targetPos))
-    local rX, rY, rZ = relCF:ToOrientation()
-    return {
-        [utf8.char(1)] = {
-            [utf8.char(0)] = originStruct,
-            [utf8.char(1)] = originStruct,
-            [utf8.char(2)] = targetPart,
-            [utf8.char(3)] = {
-                [utf8.char(0)] = relCF.X, [utf8.char(1)] = relCF.Y, [utf8.char(2)] = relCF.Z,
-                [utf8.char(3)] = rX, [utf8.char(4)] = rY, [utf8.char(5)] = rZ,
-            },
-        }
-    }
-end
-
-local function runVoidSpam()
-    local voidSpamEnabled = Toggles.VoidSpamToggle and Toggles.VoidSpamToggle.Value
-    if not voidSpamEnabled or not UseItemRemote then return end
-    
-    local objId = getEquippedObjId()
-    if not objId then return end
-    
-    pcall(function()
-        local dummyPos = Vector3.new(0, 9e9, 0)
-        local originStruct = { [utf8.char(0)] = dummyPos.X, [utf8.char(1)] = dummyPos.Y, [utf8.char(2)] = dummyPos.Z, [utf8.char(3)] = 0, [utf8.char(4)] = 0, [utf8.char(5)] = 0 }
-        local fakeData = {
-            [utf8.char(1)] = {
-                [utf8.char(0)] = originStruct,
-                [utf8.char(1)] = originStruct,
-                [utf8.char(2)] = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head"),
-                [utf8.char(3)] = { [utf8.char(0)] = 0, [utf8.char(1)] = 0, [utf8.char(2)] = 0, [utf8.char(3)] = 0, [utf8.char(4)] = 0, [utf8.char(5)] = 0 },
-            }
-        }
-        UseItemRemote:FireServer(objId, StartShootingEnum, fakeData, nil)
-    end)
-end
-
-local loopTimeCounter = 0
-local isAttackingPhase = false
-local katanaPauseUntil = 0
-
-local function runRageLogic()
-    if not Toggles.RageToggle or not Toggles.RageToggle.Value or not UseItemRemote then return end
-
-    local char = LocalPlayer.Character
-    local hrp  = char and char:FindFirstChild("HumanoidRootPart")
-    local hum  = char and char:FindFirstChildWhichIsA("Humanoid")
-    if not hrp or not hum then return end
-    
-    local hideTime = Options.HideTimeSlider and Options.HideTimeSlider.Value or 0.33
-    local attackTime = Options.AttackTimeSlider and Options.AttackTimeSlider.Value or 0.05
-    local totalCycle = hideTime + attackTime
-    if totalCycle <= 0 then totalCycle = 0.38 end
-
-    loopTimeCounter = (loopTimeCounter + RunService.Heartbeat:Wait()) % totalCycle
-    isAttackingPhase = loopTimeCounter >= hideTime
-
-    if not isAttackingPhase then
-        pcall(function()
-            hrp.CFrame = CFrame.new(hrp.Position.X, hrp.Position.Y + 50000, hrp.Position.Z)
-            hrp.Velocity = Vector3.new(hrp.Velocity.X, 0, hrp.Velocity.Z)
-            hrp.RotVelocity = Vector3.zero
-        end)
-        return
-    end
-
-    local targetPlayer = getStickyTarget()
-    if targetPlayer and targetPlayer.Character then
-        local tc = targetPlayer.Character
-        local tRoot = tc:FindFirstChild("HumanoidRootPart")
-        local tHead = tc:FindFirstChild("HitboxHeadSmall") or tc:FindFirstChild("HitboxHead") or tc:FindFirstChild("Head")
-        local objId = getEquippedObjId()
-        
-        if tRoot and tHead and objId then
-            if not isProtected(tc) then
-                local enemyWeapon = string.lower(getTargetEquippedWeaponName(targetPlayer))
-                
-                if enemyWeapon:find("katana") or enemyWeapon:find("sword") or enemyWeapon:find("parry") then
-                    katanaPauseUntil = tick() + 0.5
-                    return
-                end
-                
-                if tick() < katanaPauseUntil then
-                    return
-                end
-
-                local fakePositionCF
-                local modeVal = Options.RageModeDropdown and Options.RageModeDropdown.Value or "Gun"
-                
-                if modeVal == "Knife" or modeVal == "Melee" then
-                    fakePositionCF = tRoot.CFrame * CFrame.new(0, 1, 1.5)
-                elseif enemyWeapon:find("riot") or enemyWeapon:find("shield") then
-                    fakePositionCF = tRoot.CFrame * CFrame.new(0, 0, -6)
-                else
-                    fakePositionCF = tRoot.CFrame * CFrame.new(0, 8, 0)
-                end
-                
-                local currentRealCF = hrp.CFrame
-                
-                hrp.CFrame = fakePositionCF
-                hrp.Velocity = Vector3.zero
-                hrp.RotVelocity = Vector3.zero
-                
-                local shootOrigin = tHead.Position + Vector3.new(0, 0.2, 0)
-                local shotData = buildShotData(shootOrigin, tHead)
-                
-                if tick() >= RageModule.NextShootAt then
-                    RageModule.NextShootAt = tick() + 0.015
-                    pcall(function()
-                        UseItemRemote:FireServer(objId, StartShootingEnum, shotData, nil)
-                        UseItemRemote:FireServer(objId, StartShootingEnum, shotData, nil)
-                    end)
-                end
-                
-                RunService:BindToRenderStep("_SoftRestore", 101, function()
-                    hrp.CFrame = currentRealCF
-                    RunService:UnbindFromRenderStep("_SoftRestore")
-                end)
-            end
-        end
-    else
-        RageModule.LockedTarget = nil
-    end
-end
-
 local AntiAimModule = {
     Connection = nil,
     OriginalCFrame = nil
@@ -373,13 +86,9 @@ local function runAntiAimLogic()
     end)
 end
 
-table.insert(RageModule.Connections, RunService.Heartbeat:Connect(runRageLogic))
-table.insert(RageModule.Connections, RunService.Heartbeat:Connect(runVoidSpam))
-
 AntiAimModule.Connection = RunService.RenderStepped:Connect(function()
     runAntiAimLogic()
 end)
-table.insert(RageModule.Connections, AntiAimModule.Connection)
 
 local function isEnemyAim(p)
     if p == LocalPlayer then return false end
@@ -477,7 +186,6 @@ RunService.RenderStepped:Connect(function()
             local targetVector = Vector2.new(targetScreenPos.X, targetScreenPos.Y) - mousePos
             local speedVal = Options.AimbotSpeedSlider and Options.AimbotSpeedSlider.Value or 5
             
-            -- [수정 완료] 슬라이더 값이 50이거나 0.1 이하일 때 지연 없이 즉시 스냅되도록 변경
             if speedVal >= 50 or speedVal <= 0.1 then
                 if mousemoverel then mousemoverel(targetVector.X, targetVector.Y) end
             else
@@ -958,56 +666,13 @@ UserInputService.JumpRequest:Connect(function()
     end
 end)
 
-local RageGroup = Tabs.Main:AddLeftGroupbox("Rage")
-
-RageGroup:AddToggle("RageToggle", {
-    Text = "Rage",
-    Default = false,
-    Callback = function(v)
-    end
-})
-
-RageGroup:AddToggle("VoidSpamToggle", {
-    Text = "Void Spam",
-    Default = false,
-    Callback = function(v)
-    end
-})
+local RageGroup = Tabs.Main:AddLeftGroupbox("Combat (Anti-Aim)")
 
 RageGroup:AddToggle("AntiAimToggle", {
     Text = "Anti-Aim",
     Default = false,
     Callback = function(v)
     end
-})
-
-RageGroup:AddDivider()
-
-RageGroup:AddDropdown("RageModeDropdown", {
-    Values = { "Gun", "Secondary", "Melee", "Knife" },
-    Default = 1,
-    Multi = false,
-    Text = "Weapon Slot / Mode",
-})
-
-RageGroup:AddDivider()
-
-RageGroup:AddSlider("HideTimeSlider", {
-    Text = "Hide Time",
-    Default = 0.33,
-    Min = 0,
-    Max = 1,
-    Rounding = 2,
-    Compact = false,
-})
-
-RageGroup:AddSlider("AttackTimeSlider", {
-    Text = "Attack Time",
-    Default = 0.05,
-    Min = 0,
-    Max = 1,
-    Rounding = 2,
-    Compact = false,
 })
 
 local AimbotGroup = Tabs.Main:AddRightGroupbox("Aimbot")
@@ -1665,9 +1330,9 @@ local WatermarkConnection = RunService.RenderStepped:Connect(function()
     end;
 
     if CanDoPing then
-        Library:SetWatermark(("Valv FREE V1 | %d fps | %d ms"):format(math.floor(FPS), GetPing()))
+        Library:SetWatermark(("Valv FREE V2 | %d fps | %d ms"):format(math.floor(FPS), GetPing()))
     else
-        Library:SetWatermark(("Valv FREE V1 | %d fps"):format(math.floor(FPS)))
+        Library:SetWatermark(("Valv FREE V2 | %d fps"):format(math.floor(FPS)))
     end
 end);
 
@@ -1675,8 +1340,8 @@ Library:OnUnload(function()
     WatermarkConnection:Disconnect()
     stopFly()
     setNoclip(false)
-    for _, conn in ipairs(RageModule.Connections) do
-        pcall(function() conn:Disconnect() end)
+    if AntiAimModule.Connection then
+        pcall(function() AntiAimModule.Connection:Disconnect() end)
     end
     print("Unloaded!")
     Library.Unloaded = true
